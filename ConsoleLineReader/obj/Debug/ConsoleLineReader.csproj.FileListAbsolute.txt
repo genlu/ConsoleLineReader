@@ -1,6 +1,0 @@
-e:\temp\ConsoleLineReader\ConsoleLineReader\bin\Debug\ConsoleLineReader.exe.config
-e:\temp\ConsoleLineReader\ConsoleLineReader\bin\Debug\ConsoleLineReader.exe
-e:\temp\ConsoleLineReader\ConsoleLineReader\bin\Debug\ConsoleLineReader.pdb
-e:\temp\ConsoleLineReader\ConsoleLineReader\obj\Debug\ConsoleLineReader.csprojResolveAssemblyReference.cache
-e:\temp\ConsoleLineReader\ConsoleLineReader\obj\Debug\ConsoleLineReader.exe
-e:\temp\ConsoleLineReader\ConsoleLineReader\obj\Debug\ConsoleLineReader.pdb

@@ -10,15 +10,22 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 {
     internal class LineReader
     {
-        private int _cursor;
-        private bool _finished;
-
-        private int _maxLength;
-        private StringBuilder _lineText;
-        
         private static Dictionary<ConsoleKey, Handler> s_keyHandlers;
 
-        public string Prompt { set; get; }
+        private StringBuilder _lineText;
+        private string Prompt { set; get; }
+
+        private bool Finished { set; get; }
+
+        /// <summary>
+        /// This is the index to the _lineText that corresponding to current cursor location in console buffer.
+        /// </summary>
+        private int Cursor { set; get; }
+        private int FirstRow { set; get; }
+        private int BufferWidth { set; get; }
+        private int MaxTextLength { set; get; }
+
+        private int RowCount => _lineText == null ? 0 : (_lineText.Length + Prompt.Length) / Console.BufferWidth + 1;
 
         private struct Handler
         {
@@ -77,44 +84,44 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         private void LeftArrow()
         {
-            if (_cursor == 0)
+            if (Cursor == 0)
             {
                 return;
             }
-            SetCursor(_cursor - 1);
+            SetCursor(Cursor - 1);
         }
 
         private void RightArrow()
         {
-            if (_cursor == _lineText.Length)
+            if (Cursor == _lineText.Length)
             {
                 return;
             }
-            SetCursor(_cursor + 1);
+            SetCursor(Cursor + 1);
         }
 
         private void Backspace()
         {
-            if (_cursor == 0)
+            if (Cursor == 0)
             {
                 return;
             }
 
-            _lineText.Remove(_cursor - 1, 1);
+            _lineText.Remove(Cursor - 1, 1);
             Refresh();
-            SetCursor(_cursor - 1);
+            SetCursor(Cursor - 1);
         }
 
         private void Enter()
         {
-            _finished = true;
+            Finished = true;
         }
 
         private void InsertChar(char insert)
         {
-            _lineText.Insert(_cursor, insert);
+            _lineText.Insert(Cursor, insert);
             Refresh();
-            SetCursor(_cursor + 1);
+            SetCursor(Cursor + 1);
         }
 
         private void TypeChar(char typedChar)
@@ -129,51 +136,51 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         private void Refresh()
         {
             int len = Prompt.Length + _lineText.Length;
-            int max = Math.Max(_maxLength, len);
+            int max = Math.Max(MaxTextLength, len);
 
             Console.SetCursorPosition(0, Console.CursorTop);
             Console.Write(Prompt);
             Console.Write(_lineText.ToString());
 
             // clear the rest of the line
-            for (int i = len; i < _maxLength; ++i)
+            for (int i = len; i < MaxTextLength; ++i)
             {
                 Console.Write(' ');
             }
 
-            _maxLength = max;
+            MaxTextLength = max;
         }
 
         private void SetCursor(int pos)
         {
-            if (_cursor == pos)
+            if (Cursor == pos)
             {
                 return;
             }
 
-            _cursor = pos;
+            Cursor = pos;
 
-            Console.SetCursorPosition(_cursor + Prompt.Length, Console.CursorTop);
+            Console.SetCursorPosition(Cursor + Prompt.Length, Console.CursorTop);
         }
 
         public string ReadLine(string prompt = "")
         {
             Prompt = prompt;
             _lineText = new StringBuilder();
-            _cursor = 0;
-            _maxLength = 0;
+            Cursor = 0;
+            MaxTextLength = 0;
 
             Refresh();
 
-            _finished = false;
+            Finished = false;
             ConsoleKeyInfo keyInfo;
 
-            while (!_finished)
+            while (!Finished)
             {
                 keyInfo = Console.ReadKey(intercept: true);
 
                 Handler handler;
-                if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) && 
+                if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
                     keyInfo.Modifiers == handler.KeyInfo.Modifiers)
                 {
                     handler.KeyHandler();
@@ -189,17 +196,17 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         }
     }
 
-	public class Test
+    public class Test
     {
-		public static void Main()
-		{
-			LineReader reader = new LineReader();
-			string s;
-			
-			while ((s = reader.ReadLine("> ")) != null)
+        public static void Main()
+        {
+            LineReader reader = new LineReader();
+            string s;
+
+            while ((s = reader.ReadLine("> ")) != null)
             {
-				Console.WriteLine ("----> [{0}]", s);
-			}
-		}
-	}
+                Console.WriteLine("----> [{0}]", s);
+            }
+        }
+    }
 }
