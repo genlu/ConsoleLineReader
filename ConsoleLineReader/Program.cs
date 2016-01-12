@@ -14,6 +14,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         private StringBuilder _lineText;
         private string Prompt { set; get; }
+        private int PrintLength => _lineText == null || Prompt == null ? 0 : _lineText.Length + Prompt.Length;
 
         private bool Finished { set; get; }
 
@@ -21,11 +22,17 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         /// This is the index to the _lineText that corresponding to current cursor location in console buffer.
         /// </summary>
         private int Cursor { set; get; }
+
+        // following two values need to be updated whenever buffer width is changed
         private int FirstRow { set; get; }
         private int BufferWidth { set; get; }
+
+        private int RelativeTop => (Cursor + Prompt.Length) / BufferWidth + FirstRow;
+        private int RelativeLeft => (Cursor + Prompt.Length) % BufferWidth;
+
         private int MaxTextLength { set; get; }
 
-        private int RowCount => _lineText == null ? 0 : (_lineText.Length + Prompt.Length) / Console.BufferWidth + 1;
+        private int RowCount => _lineText == null ? 0 : (_lineText.Length + Prompt.Length) / BufferWidth + 1;
 
         private struct Handler
         {
@@ -62,24 +69,35 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             s_keyHandlers[ConsoleKey.LeftArrow] = new Handler(ConsoleKey.LeftArrow, LeftArrow);
             s_keyHandlers[ConsoleKey.RightArrow] = new Handler(ConsoleKey.RightArrow, RightArrow);
             s_keyHandlers[ConsoleKey.Backspace] = new Handler(ConsoleKey.Backspace, Backspace);
+            s_keyHandlers[ConsoleKey.Delete] = new Handler(ConsoleKey.Delete, Delete);
             s_keyHandlers[ConsoleKey.Enter] = new Handler(ConsoleKey.Enter, Enter);
+        }
+
+        private void InitLine(string prompt)
+        {
+            _lineText = new StringBuilder();
+            FirstRow = Console.CursorTop;
+            BufferWidth = Console.BufferWidth;
+            MaxTextLength = 0;
+            Prompt = prompt;
+            Finished = false;
         }
 
         private void Escape()
         {
             _lineText.Clear();
             Refresh();
-            SetCursor(0);
+            SetCursorPosition(0);
         }
 
         private void Home()
         {
-            SetCursor(0);
+            SetCursorPosition(0);
         }
 
         private void End()
         {
-            SetCursor(_lineText.Length);
+            SetCursorPosition(_lineText.Length);
         }
 
         private void LeftArrow()
@@ -88,7 +106,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             {
                 return;
             }
-            SetCursor(Cursor - 1);
+            SetCursorPosition(Cursor - 1);
         }
 
         private void RightArrow()
@@ -97,7 +115,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             {
                 return;
             }
-            SetCursor(Cursor + 1);
+            SetCursorPosition(Cursor + 1);
         }
 
         private void Backspace()
@@ -107,9 +125,22 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
                 return;
             }
 
-            _lineText.Remove(Cursor - 1, 1);
+            var prev = Cursor - 1;
+            _lineText.Remove(prev, 1);
             Refresh();
-            SetCursor(Cursor - 1);
+            SetCursorPosition(prev);
+        }
+
+        private void Delete()
+        {
+            if (Cursor == _lineText.Length)
+            {
+                return;
+            }
+
+            _lineText.Remove(Cursor, 1);
+            Refresh();
+            SetCursorPosition(Cursor);
         }
 
         private void Enter()
@@ -117,11 +148,11 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             Finished = true;
         }
 
-        private void InsertChar(char insert)
+        private void InsertChar(char c)
         {
-            _lineText.Insert(Cursor, insert);
+            _lineText.Insert(Cursor, c);
             Refresh();
-            SetCursor(Cursor + 1);
+            SetCursorPosition(Cursor + 1);
         }
 
         private void TypeChar(char typedChar)
@@ -135,15 +166,15 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         private void Refresh()
         {
-            int len = Prompt.Length + _lineText.Length;
-            int max = Math.Max(MaxTextLength, len);
+            int max = Math.Max(MaxTextLength, PrintLength);
 
-            Console.SetCursorPosition(0, Console.CursorTop);
+            // todo: de we need to keep track of the actual first column instead of using 0?
+            Console.SetCursorPosition(0, FirstRow);
             Console.Write(Prompt);
             Console.Write(_lineText.ToString());
 
             // clear the rest of the line
-            for (int i = len; i < MaxTextLength; ++i)
+            for (int i = PrintLength; i < MaxTextLength; ++i)
             {
                 Console.Write(' ');
             }
@@ -151,48 +182,66 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             MaxTextLength = max;
         }
 
-        private void SetCursor(int pos)
+
+        /// <summary>
+        /// !Critical!
+        /// All other cnosole buffer info relies on the correct update here.
+        /// </summary>
+        private void UpdateBufferInfo()
         {
-            if (Cursor == pos)
+            if (BufferWidth == Console.BufferWidth)
             {
                 return;
             }
+            BufferWidth = Console.BufferWidth;
+            FirstRow = Console.CursorTop - Cursor / BufferWidth; 
+        }
 
+        /// <summary>
+        /// Set cursor position in console
+        /// </summary>
+        /// <param name="pos">the index into the input string builder (which doesn't include prompt), that corresponding to new cursor position</param>
+        private void SetCursorPosition(int pos)
+        {
             Cursor = pos;
-
-            Console.SetCursorPosition(Cursor + Prompt.Length, Console.CursorTop);
+            Console.SetCursorPosition(RelativeLeft, RelativeTop);
         }
 
         public string ReadLine(string prompt = "")
         {
-            Prompt = prompt;
-            _lineText = new StringBuilder();
-            Cursor = 0;
-            MaxTextLength = 0;
-
+            InitLine(prompt);        
             Refresh();
-
-            Finished = false;
             ConsoleKeyInfo keyInfo;
 
-            while (!Finished)
+            using (var debugLog = new StreamWriter(@"e:\DebugOutput.txt"))
             {
-                keyInfo = Console.ReadKey(intercept: true);
-
-                Handler handler;
-                if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
-                    keyInfo.Modifiers == handler.KeyInfo.Modifiers)
+                while (!Finished)
                 {
-                    handler.KeyHandler();
-                    continue;
+                    Debug(debugLog);
+                    keyInfo = Console.ReadKey(intercept: true);
+                    UpdateBufferInfo();
+
+                    Handler handler;
+                    if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
+                        keyInfo.Modifiers == handler.KeyInfo.Modifiers)
+                    {
+                        handler.KeyHandler();
+                        continue;
+                    }
+
+                    TypeChar(keyInfo.KeyChar);
                 }
 
-                TypeChar(keyInfo.KeyChar);
+                Console.WriteLine();
+                return _lineText == null ? null : _lineText.ToString();
             }
+        }
 
-            Console.WriteLine();
-
-            return _lineText == null ? null : _lineText.ToString();
+        private static void Debug(StreamWriter logWriter)
+        {
+            logWriter.Write($"{{Buffer Width : {Console.BufferWidth}}}, {{Window Width : {Console.WindowWidth}}}, ");
+            logWriter.WriteLine($"{{Cursor Top : {Console.CursorTop}}}, {{Cursor Left : {Console.CursorLeft}}}");
+            logWriter.Flush();
         }
     }
 
