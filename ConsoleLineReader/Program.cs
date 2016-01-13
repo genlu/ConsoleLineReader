@@ -13,10 +13,12 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         private static Dictionary<ConsoleKey, Handler> s_keyHandlers;
 
         private StringBuilder _lineText;
-        private string Prompt { set; get; }
-        private int PrintLength => _lineText == null || Prompt == null ? 0 : _lineText.Length + Prompt.Length;
+        private string _prompt;
+        private int PrintLength => _lineText == null || _prompt == null ? 0 : _lineText.Length + _prompt.Length;
 
-        private bool Finished { set; get; }
+        private bool _finished;
+
+        private History _history;
 
         /// <summary>
         /// This is the index to the _lineText that corresponding to current cursor location in console buffer.
@@ -27,12 +29,12 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         private int FirstRow { set; get; }
         private int BufferWidth { set; get; }
 
-        private int RelativeTop => (Cursor + Prompt.Length) / BufferWidth + FirstRow;
-        private int RelativeLeft => (Cursor + Prompt.Length) % BufferWidth;
+        private int RelativeTop => (Cursor + _prompt.Length) / BufferWidth + FirstRow;
+        private int RelativeLeft => (Cursor + _prompt.Length) % BufferWidth;
 
         private int MaxTextLength { set; get; }
 
-        private int RowCount => _lineText == null ? 0 : (_lineText.Length + Prompt.Length) / BufferWidth + 1;
+        private int RowCount => _lineText == null ? 0 : (_lineText.Length + _prompt.Length) / BufferWidth + 1;
 
         private struct Handler
         {
@@ -61,6 +63,8 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         public LineReader()
         {
+            _history = new History();
+
             s_keyHandlers = new Dictionary<ConsoleKey, Handler>();
 
             s_keyHandlers[ConsoleKey.Escape] = new Handler(ConsoleKey.Escape, Escape);
@@ -68,19 +72,23 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             s_keyHandlers[ConsoleKey.End] = new Handler(ConsoleKey.End, End);
             s_keyHandlers[ConsoleKey.LeftArrow] = new Handler(ConsoleKey.LeftArrow, LeftArrow);
             s_keyHandlers[ConsoleKey.RightArrow] = new Handler(ConsoleKey.RightArrow, RightArrow);
+            s_keyHandlers[ConsoleKey.UpArrow] = new Handler(ConsoleKey.UpArrow, UpArrow);
+            s_keyHandlers[ConsoleKey.DownArrow] = new Handler(ConsoleKey.DownArrow, DownArrow);
             s_keyHandlers[ConsoleKey.Backspace] = new Handler(ConsoleKey.Backspace, Backspace);
             s_keyHandlers[ConsoleKey.Delete] = new Handler(ConsoleKey.Delete, Delete);
             s_keyHandlers[ConsoleKey.Enter] = new Handler(ConsoleKey.Enter, Enter);
+            s_keyHandlers[ConsoleKey.Tab] = new Handler(ConsoleKey.Tab, () => { });
         }
 
         private void InitLine(string prompt)
         {
             _lineText = new StringBuilder();
+            Cursor = 0;
             FirstRow = Console.CursorTop;
             BufferWidth = Console.BufferWidth;
             MaxTextLength = 0;
-            Prompt = prompt;
-            Finished = false;
+            _prompt = prompt;
+            _finished = false;
         }
 
         private void Escape()
@@ -118,6 +126,32 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             SetCursorPosition(Cursor + 1);
         }
 
+        private void UpArrow()
+        {
+            var prevEntry = _history.Previous();
+            if (prevEntry == null)
+            {
+                return;
+            }
+            _lineText.Clear();
+            _lineText.Append(prevEntry);
+            Refresh();
+            SetCursorPosition(_lineText.Length); 
+        }
+
+        private void DownArrow()
+        {
+            var nextEntry = _history.Next();
+            if (nextEntry == null)
+            {
+                return;
+            }
+            _lineText.Clear();
+            _lineText.Append(nextEntry);
+            Refresh();
+            SetCursorPosition(_lineText.Length);
+        }
+
         private void Backspace()
         {
             if (Cursor == 0)
@@ -145,7 +179,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         private void Enter()
         {
-            Finished = true;
+            _finished = true;
         }
 
         private void InsertChar(char c)
@@ -170,7 +204,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
             // todo: de we need to keep track of the actual first column instead of using 0?
             Console.SetCursorPosition(0, FirstRow);
-            Console.Write(Prompt);
+            Console.Write(_prompt);
             Console.Write(_lineText.ToString());
 
             // clear the rest of the line
@@ -213,35 +247,99 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             Refresh();
             ConsoleKeyInfo keyInfo;
 
-            using (var debugLog = new StreamWriter(@"e:\DebugOutput.txt"))
+            while (!_finished)
             {
-                while (!Finished)
+                keyInfo = Console.ReadKey(intercept: true);
+                UpdateBufferInfo();
+
+                Handler handler;
+                if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
+                    keyInfo.Modifiers == handler.KeyInfo.Modifiers)
                 {
-                    Debug(debugLog);
-                    keyInfo = Console.ReadKey(intercept: true);
-                    UpdateBufferInfo();
-
-                    Handler handler;
-                    if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
-                        keyInfo.Modifiers == handler.KeyInfo.Modifiers)
-                    {
-                        handler.KeyHandler();
-                        continue;
-                    }
-
-                    TypeChar(keyInfo.KeyChar);
+                    handler.KeyHandler();
+                    continue;
                 }
 
-                Console.WriteLine();
-                return _lineText == null ? null : _lineText.ToString();
+                TypeChar(keyInfo.KeyChar);
             }
+
+            Console.WriteLine();
+            var text = _lineText?.ToString();
+            if (text != null)
+            {
+                _history.Add(text);
+            }
+            return text;
         }
 
-        private static void Debug(StreamWriter logWriter)
+        private class History
         {
-            logWriter.Write($"{{Buffer Width : {Console.BufferWidth}}}, {{Window Width : {Console.WindowWidth}}}, ");
-            logWriter.WriteLine($"{{Cursor Top : {Console.CursorTop}}}, {{Cursor Left : {Console.CursorLeft}}}");
-            logWriter.Flush();
+            private List<string> _history;
+            private int _current;
+
+            public int MaxCount { get; private set; }
+
+            public History(int maxLength = 50)
+            {
+                MaxCount = maxLength;
+                _history = new List<string>();
+                _current = -1;
+            }
+
+            public void Clear()
+            {
+                _history.Clear();
+                _current = -1;
+            }
+
+            public int Count => _history.Count;
+
+            private string Last => Count == 0 ? null : _history[Count - 1];
+
+            public void Add(string text)
+            {
+                if (Last != text)
+                {
+                    _history.Add(text);
+                }
+
+                if (_current != -1 && _history[_current] != text)
+                {
+                    _current = -1;
+                }
+
+                if (Count > MaxCount)
+                {
+                    _history.RemoveAt(0);
+                    if (_current > 0)
+                    {
+                        _current--;
+                    }
+                }
+            }
+
+            public string Next()
+            {
+                if ( _current == -1 || _current + 1 == Count)
+                {
+                    _current = -1;
+                    return null;
+                }
+                return _history[++_current];
+            }
+
+            public string Previous()
+            {
+                if (Count == 0 || _current == 0)
+                {
+                    return null;
+                }
+                if (_current == -1)
+                {
+                    _current = Count;
+                }
+                return _history[--_current];
+            }
         }
     }
 
