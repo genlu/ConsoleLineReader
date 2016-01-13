@@ -10,10 +10,13 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 {
     internal class LineReader
     {
-        private static Dictionary<ConsoleKey, Handler> s_keyHandlers;
+        private static List<Handler> s_handlers;
 
         private StringBuilder _lineText;
+
         private string _prompt;
+        private readonly string _tab;
+
         private int PrintLength => _lineText == null || _prompt == null ? 0 : _lineText.Length + _prompt.Length;
 
         private bool _finished;
@@ -64,20 +67,22 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
         public LineReader()
         {
             _history = new History();
+            _tab = new string(' ', 4);
 
-            s_keyHandlers = new Dictionary<ConsoleKey, Handler>();
-
-            s_keyHandlers[ConsoleKey.Escape] = new Handler(ConsoleKey.Escape, Escape);
-            s_keyHandlers[ConsoleKey.Home] = new Handler(ConsoleKey.Home, Home);
-            s_keyHandlers[ConsoleKey.End] = new Handler(ConsoleKey.End, End);
-            s_keyHandlers[ConsoleKey.LeftArrow] = new Handler(ConsoleKey.LeftArrow, LeftArrow);
-            s_keyHandlers[ConsoleKey.RightArrow] = new Handler(ConsoleKey.RightArrow, RightArrow);
-            s_keyHandlers[ConsoleKey.UpArrow] = new Handler(ConsoleKey.UpArrow, UpArrow);
-            s_keyHandlers[ConsoleKey.DownArrow] = new Handler(ConsoleKey.DownArrow, DownArrow);
-            s_keyHandlers[ConsoleKey.Backspace] = new Handler(ConsoleKey.Backspace, Backspace);
-            s_keyHandlers[ConsoleKey.Delete] = new Handler(ConsoleKey.Delete, Delete);
-            s_keyHandlers[ConsoleKey.Enter] = new Handler(ConsoleKey.Enter, Enter);
-            s_keyHandlers[ConsoleKey.Tab] = new Handler(ConsoleKey.Tab, () => { });
+            s_handlers = new List<Handler>()
+                {
+                    new Handler(ConsoleKey.Escape, Escape),
+                    new Handler(ConsoleKey.Home, Home),
+                    new Handler(ConsoleKey.End, End),
+                    new Handler(ConsoleKey.LeftArrow, LeftArrow),
+                    new Handler(ConsoleKey.RightArrow, RightArrow),
+                    new Handler(ConsoleKey.UpArrow, UpArrow),
+                    new Handler(ConsoleKey.DownArrow, DownArrow),
+                    new Handler(ConsoleKey.Backspace, Backspace),
+                    new Handler(ConsoleKey.Delete, Delete),
+                    new Handler(ConsoleKey.Enter, Enter),
+                    new Handler(ConsoleKey.Tab, Tab)
+                };
         }
 
         private void InitLine(string prompt)
@@ -182,6 +187,13 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             _finished = true;
         }
 
+        private void Tab()
+        {
+            _lineText.Insert(Cursor, _tab);
+            Refresh();
+            SetCursorPosition(Cursor + _tab.Length);
+        }
+
         private void InsertChar(char c)
         {
             _lineText.Insert(Cursor, c);
@@ -191,7 +203,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
 
         private void TypeChar(char typedChar)
         {
-            if (typedChar == '\0')
+            if (typedChar < (char)32)
             {
                 return;
             }
@@ -252,11 +264,20 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
                 keyInfo = Console.ReadKey(intercept: true);
                 UpdateBufferInfo();
 
-                Handler handler;
-                if (s_keyHandlers.TryGetValue(keyInfo.Key, out handler) &&
-                    keyInfo.Modifiers == handler.KeyInfo.Modifiers)
+                bool handled = false;
+                foreach(var handler in s_handlers)
                 {
-                    handler.KeyHandler();
+                    if (keyInfo.Key == handler.KeyInfo.Key && 
+                        keyInfo.Modifiers == handler.KeyInfo.Modifiers)
+                    {
+                        handler.KeyHandler();
+                        handled = true;
+                        break;
+                    }
+                }
+
+                if (handled)
+                {
                     continue;
                 }
 
