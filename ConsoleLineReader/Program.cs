@@ -293,7 +293,7 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
             return text;
         }
 
-        private class History
+        private struct History
         {
             private List<string> _history;
             private int _current;
@@ -361,6 +361,97 @@ namespace Microsoft.CodeAnalysis.Scripting.Hosting
                 }
                 return _history[--_current];
             }
+        }
+
+        protected class IndentationModel
+        {
+            private readonly char _openBracket = '{';
+            private readonly char _closeBracket = '}';
+
+            private readonly LineReader _lineReader;
+            private StringBuilder TextBuilder => _lineReader._lineText;
+
+            private readonly Stack<int> _openBracketStarts = new Stack<int>();
+            private int _lineStart;
+
+            public IndentationModel(LineReader lineReader)
+            {
+                _lineReader = lineReader;
+                _lineStart = 0;
+            }
+
+            public int GetIndentationForNewLine()
+            {
+                return _lineStart;
+            }
+
+            public void Update()
+            {
+                if (_lineReader._finished == false)
+                {
+                    return;
+                }
+                var first = TextBuilder.IndexOfFirstNonWhitespaceCharacter();
+
+                var openBrackets = 0;
+                for (int i = 0; i< TextBuilder.Length; ++i)
+                {
+                    var c = TextBuilder[i];
+                    if (c == _openBracket)
+                    {
+                        _openBracketStarts.Push(first);
+                        openBrackets++;
+                    }
+                    else if (c == _closeBracket)
+                    {
+                        if (_openBracketStarts.Count > 0)
+                        {
+                            _lineStart = _openBracketStarts.Peek();
+                            _openBracketStarts.Pop();
+                            if (openBrackets > 0)
+                            {
+                                openBrackets--;
+                            }
+                        }
+                    }
+                }
+                if (openBrackets > 0)
+                {
+                    _lineStart += _lineReader._tab.Length;
+                }
+            }
+        }
+    }
+
+    internal static class Helpers
+    {
+        internal static int IndexOfFirstNonWhitespaceCharacter(this StringBuilder stringBuilder)
+        {
+            if (stringBuilder == null)
+            {
+                return -1;
+            }
+            for (int i = 0; i < stringBuilder.Length; ++i)
+            {
+                if (!Char.IsWhiteSpace(stringBuilder[i]))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        internal static IEnumerable<char> GetCharacters(this StringBuilder stringBuilder)
+        {
+            if (stringBuilder == null)
+            {
+                yield break;
+            }
+            for (int i = 0; i< stringBuilder.Length; ++i)
+            {
+                yield return stringBuilder[i];
+            }
+            yield break;
         }
     }
 
